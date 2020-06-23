@@ -1,0 +1,233 @@
+---
+title: "Pronósticos"
+author: "Iván Arellano, Alan Trillo , Luis Gómez "
+output:
+  html_notebook:
+    toc: TRUE
+    toc_float: TRUE
+    theme: cerulean
+    highlight: tango
+---
+
+```{r load_libraries, message=FALSE, warning=FALSE, error=FALSE}
+library(tidyverse)
+library(tidyquant)
+library(plotly)
+library(DT)
+library(ggcorrplot)
+library(zoo)
+library(lubridate)
+library(fpp2)
+library(fpp3)
+library(scales)
+library(patchwork)
+library(feasts)
+library(fable)
+```
+
+
+## 1) Conseguir datos históricos sobre dos series de tiempo.
+
+En este caso utilizaremos datos históricos sobre el tipo de cambio USD/MXN, y los precios de los futuros del petróleo.
+
+```{r load_data, warning=FALSE, message=FALSE}
+datos_tarea <- read_csv("./data.csv")
+```
+
+## 2) Seguir los pasos del flujo de trabajo de pronóstico.
+
+**Preparación de los datos (limpieza)**
+
+```{r cleaning_data, warning=FALSE, message=FALSE}
+mxn <- datos_tarea %>% 
+  filter(symbol=="MXN=X") %>% 
+  mutate('ind' = row_number()) %>% 
+  select('ind', 'close')
+
+petroleo <- datos_tarea %>% 
+  filter(symbol=="CL=F") %>%
+  mutate('ind' = row_number()) %>% 
+  select('ind', 'close')
+
+# mxn <- na.omit(mxn) 
+mxn <- as_tsibble(mxn, index = `ind`)
+
+# petroleo <- na.omit(petroleo) 
+petroleo <- as_tsibble(petroleo, index = `ind`)
+```
+
+**Gráfica de los datos (visualización)**
+
+```{r data_vis1, warning=F, message=F}
+ggplot(data = mxn)+
+  geom_line(aes(x = ind , y = close)) +
+  ggtitle(label = "Gráfica de tipo de cambio USD/MXN ")
+```
+
+```{r data_vis2, warning=F, message=F}
+ggplot(data = petroleo) +
+  geom_line(aes(x = ind , y = close)) +
+  ggtitle(label = "Gráfica de los futuros del petroleo")
+```
+
+## 3) Estimar los modelos de referencia (benchmark) que consideren adecuados para su serie.
+**Definición del modelo (especificación)**
+
+```{r especificacion_usdmxn, fig.width=10,fig.height=8, warning=F, message=F}
+
+mxn.benchmark_train <- mxn %>% filter_index(1 ~ 2140)
+# mxn.benchmark_train <- tidyr::complete(mxn.benchmark_train) 
+
+mxn.benchmark_fit <- mxn.benchmark_train %>%
+  model(
+    `Naïve` = NAIVE(close),
+    `Trend` = TSLM(close),
+    `Deriva` = RW(close ~ drift())
+)
+
+mxn.benchmark_forecast <- mxn.benchmark_fit %>% forecast(h=61)
+
+# Plot forecasts against actual values
+# mxn.benchmark_forecast %>%
+#   autoplot(mxn.benchmark_train,) +
+#     autolayer(filter_index(mxn, "2020-04-01" ~ .), color = "black") +
+#     ggtitle("Pronóstico tipo de cambio USD/MXN") +
+#     xlab("Year") + ylab("Megalitres") +
+#     guides(colour=guide_legend(title="Forecast"))
+
+
+plot_forecast <- function(data, train_data, forecast_data, model_name, start_date, plot_title) {
+  pl <- forecast_data %>% 
+    filter(.model == model_name) %>% 
+    autoplot(train_data,) +
+    autolayer(filter_index(data, start_date ~ .), color = "black") +
+    ggtitle(plot_title) +
+    xlab("Date") + ylab("Close") + 
+    guides(colour=guide_legend(title="Forecast"))
+  return(pl)
+}
+
+pl1 <- plot_forecast(mxn, mxn.benchmark_train, mxn.benchmark_forecast, 
+                     'Naïve', 2140, "Pronóstico tipo de cambio USD/MXN Naive")
+pl2 <- plot_forecast(mxn, mxn.benchmark_train, mxn.benchmark_forecast, 
+                     'Trend', 2140, "Pronóstico tipo de cambio USD/MXN Trend")
+pl3 <- plot_forecast(mxn, mxn.benchmark_train, mxn.benchmark_forecast, 
+                     'Deriva', 2140, "Pronóstico tipo de cambio USD/MXN Deriva")
+
+(pl1 / pl2) /
+  pl3
+
+```
+
+
+```{r especificacion_petroleo, fig.width=10,fig.height=8}
+petroleo.benchmark_train <- petroleo %>% filter_index(1 ~ 2501)
+
+petroleo.benchmark_fit <- petroleo.benchmark_train %>%
+  model(
+    `Naïve` = NAIVE(close),
+    `Trend` = TSLM(close),
+    `Deriva` = RW(close ~ drift())
+)
+
+petroleo.benchmark_forecast <- petroleo.benchmark_fit %>% forecast(h=61)
+
+pl1 <- plot_forecast(petroleo, petroleo.benchmark_train, petroleo.benchmark_forecast, 
+                     'Naïve', 2501, "Pronóstico futuros petróleo Naive")
+pl2 <- plot_forecast(petroleo, petroleo.benchmark_train, petroleo.benchmark_forecast, 
+                     'Trend', 2501, "Pronóstico futuros petróleo Trend")
+pl3 <- plot_forecast(mxn, petroleo.benchmark_train, petroleo.benchmark_forecast, 
+                     'Deriva', 2501, "Pronóstico futuros petróleo Deriva")
+
+(pl1 / pl2) /
+  pl3
+
+
+```
+
+Graficamos solamente los pronósticos para observar de manera más sencilla los niveles de confianza. En ambas series de tiempo utilizaremos el modelo de Deriva y Naïve para ver cuál se ajusta mejor.
+
+
+## 4) Realicen el diagnóstico de residuales e interpreten los resultados.
+
+```{r mxn_naive, message=F, warning=F}
+mxn.naive <- mxn.benchmark_train %>% 
+  model(NAIVE(close)) 
+
+augment(mxn.naive) %>% 
+  features(.resid, ljung_box, lag=10, dof=0)
+
+mxn.naive %>% 
+  gg_tsresiduals() +
+  ggtitle("Diagnostico para el modelo Naive de USD/MXN")
+
+```
+
+```{r mxn_deriva, warning=F, message=F}
+mxn.deriva <- mxn.benchmark_train %>% 
+  model(RW(close ~ drift())) 
+
+augment(mxn.deriva) %>% 
+  features(.resid, ljung_box, lag=10, dof=0)
+
+mxn.deriva %>% 
+  gg_tsresiduals() +
+  ggtitle("Diagnostico para el modelo Deriva de USD/MXN")
+
+```
+
+```{r petroleo_naive, warning=F, message=F}
+petroleo.naive <- petroleo.benchmark_train %>% 
+  model(NAIVE(close)) 
+
+augment(petroleo.naive) %>% 
+  features(.resid, ljung_box, lag=10, dof=0)
+
+petroleo.naive %>% 
+  gg_tsresiduals() +
+  ggtitle("Diagnostico para el modelo Naive de Petroleo")
+```
+
+```{r petroleo_deriva, warning=F, message=F}
+petroleo.deriva <- petroleo.benchmark_train %>% 
+  model(RW(close ~ drift())) 
+
+augment(petroleo.deriva) %>% 
+  features(.resid, ljung_box, lag=10, dof=0)
+
+petroleo.deriva %>% 
+  gg_tsresiduals() +
+  ggtitle("Diagnostico para el modelo Deriva de Petroleo")
+
+```
+
+En ambos casos podemos ver que no se presentó alguna diferencia notable entre los modelos de *Deriva* y *Naïve*, además que los *p-values* nos indican que nuestro modelo no está bien ajustado junto con una correlación un tanto alta en el caso de los datos del petróleo.
+
+## 5) Ejecuten un pronóstico (ustedes deciden el horizonte de pronóstico) y definan si utilizar el método bootstrap o no y justifiquen su decisión.
+
+```{r bootstrap_mxn, message=F, warning=F}
+mxn.bootstrap <- mxn %>% model(NAIVE(close)) %>% forecast(h=61)
+
+mxn.bootstrap %>%  autoplot(mxn) +
+  ggtitle("Pronóstico tipo de cambio USD/MXN")
+```
+
+```{r bootstrap_petroleo, warning=F, message=F}
+petroleo.bootstrap <- petroleo %>% model(NAIVE(close)) %>% forecast(h=61, bootstrap = TRUE)
+
+petroleo.bootstrap %>%  autoplot(petroleo) +
+  ggtitle("Pronóstico precio futuros de petróleo USD/MXN")
+```
+
+En el caso del petróleo utilizamos el método de **Bootstrap** debido a que los datos del petróleo presentaban una autocorrelación baja, mientras que para el tipo de cambio utilizamos el pronóstico del modelo **Naive**
+
+## Medición de errores
+
+```{r error_petroleo, warning=F, message=F}
+accuracy(petroleo.benchmark_fit)
+```
+```{r error_mxn, warning=F, message=F}
+accuracy(mxn.benchmark_fit)
+
+```
+
