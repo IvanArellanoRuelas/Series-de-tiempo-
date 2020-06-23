@@ -31,7 +31,7 @@ library(fable)
 En este caso utilizaremos datos históricos sobre el tipo de cambio USD/MXN, y los precios de los futuros del petróleo.
 
 ```{r load_data, warning=FALSE, message=FALSE}
-datos_tarea <- read_csv("./data.csv")
+datos_tarea <- read_csv("./data1.csv")
 ```
 
 ## 2) Seguir los pasos del flujo de trabajo de pronóstico.
